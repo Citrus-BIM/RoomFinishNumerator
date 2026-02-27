@@ -1,13 +1,54 @@
 ﻿<Window x:Class="RoomFinishNumerator.RoomFinishNumeratorOpeningsProgressBarWPF"
-             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
-             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
-             mc:Ignorable="d" 
-             d:DesignHeight="100" d:DesignWidth="450" Title="Площади проёмов вычисляются. Нужно немного подождать..." MaxHeight="100" MaxWidth="450"
-             MinHeight="100" MinWidth="450" WindowStyle="SingleBorderWindow" ResizeMode="NoResize" Icon="Resources/citrus.ico" WindowStartupLocation="CenterScreen"
-             Topmost="True">
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        mc:Ignorable="d"
+        Title="Площади проёмов вычисляются. Нужно немного подождать..."
+        Height="100" Width="450"
+        MaxHeight="100" MaxWidth="450"
+        MinHeight="100" MinWidth="450"
+        WindowStyle="SingleBorderWindow"
+        ResizeMode="NoResize"
+        Icon="pack://application:,,,/RoomFinishNumerator;component/Resources/citrus.ico"
+        WindowStartupLocation="CenterScreen"
+        Topmost="True"
+
+        FontFamily="{DynamicResource BaseFont}"
+        FontSize="{DynamicResource FontSizeBase}"
+        Foreground="{DynamicResource TextBrush}"
+        TextOptions.TextFormattingMode="Ideal"
+        TextOptions.TextRenderingMode="Auto"
+        TextOptions.TextHintingMode="Fixed"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        Language="ru-RU">
+
+    <!-- Citrus theme -->
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <!-- замени assembly/путь при необходимости -->
+                <ResourceDictionary Source="/RoomFinishNumerator;component/CitrusTheme/CitrusTheme.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
+
+    <!-- Один Grid, ProgressBar + Label поверх -->
     <Grid>
-        <ProgressBar Name="pb_RoomFinishNumeratorOpeningsProgressBar" Margin="10" Value="0"/>
+        <ProgressBar x:Name="pb_RoomFinishNumeratorOpeningsProgressBar"
+                     Margin="10"
+                     Minimum="0"
+                     Maximum="100"
+                     Value="0"/>
+
+        <Label x:Name="label_ItemName"
+               Content=""
+               Margin="15"
+               Padding="0"
+               FontSize="10"
+               HorizontalContentAlignment="Center"
+               VerticalContentAlignment="Center"
+               IsHitTestVisible="False"/>
     </Grid>
 </Window>

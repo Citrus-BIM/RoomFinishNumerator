@@ -219,8 +219,14 @@ namespace RoomFinishNumerator
 
                         foreach (var r in roomListForNumbering)
                         {
-                            r.LookupParameter("АР_НомераПомещенийВедОтделки").Set(roomNumbersByRoom);
-                            r.LookupParameter("АР_ИменаПомещенийВедОтделки").Set(roomNamesByRoom);
+                            if (!r.LookupParameter("АР_НомераПомещенийВедОтделки").IsReadOnly)
+                            {
+                                r.LookupParameter("АР_НомераПомещенийВедОтделки").Set(roomNumbersByRoom);
+                            }
+                            if (!r.LookupParameter("АР_ИменаПомещенийВедОтделки").IsReadOnly)
+                            {
+                                r.LookupParameter("АР_ИменаПомещенийВедОтделки").Set(roomNamesByRoom);
+                            }
                         }
                     }
                     CloseProgressBar();
@@ -258,8 +264,14 @@ namespace RoomFinishNumerator
 
                             foreach (var r in roomListForNumbering)
                             {
-                                r.LookupParameter("АР_НомераПомещенийВедОтделки").Set(roomNumbersByRoom);
-                                r.LookupParameter("АР_ИменаПомещенийВедОтделки").Set(roomNamesByRoom);
+                                if (!r.LookupParameter("АР_НомераПомещенийВедОтделки").IsReadOnly)
+                                {
+                                    r.LookupParameter("АР_НомераПомещенийВедОтделки").Set(roomNumbersByRoom);
+                                }
+                                if (!r.LookupParameter("АР_ИменаПомещенийВедОтделки").IsReadOnly)
+                                {
+                                    r.LookupParameter("АР_ИменаПомещенийВедОтделки").Set(roomNamesByRoom);
+                                }
                             }
                         }
                         t.Commit();
@@ -294,7 +306,10 @@ namespace RoomFinishNumerator
 
                         foreach (var r in roomListForNumbering)
                         {
-                            r.LookupParameter("АР_НомераПомещенийВедПлинтусов").Set(baseboardNumbersByRoom);
+                            if (!r.LookupParameter("АР_НомераПомещенийВедПлинтусов").IsReadOnly)
+                            {
+                                r.LookupParameter("АР_НомераПомещенийВедПлинтусов").Set(baseboardNumbersByRoom);
+                            }
                         }
                     }
                     CloseProgressBar();
@@ -331,7 +346,10 @@ namespace RoomFinishNumerator
 
                             foreach (var r in roomListForNumbering)
                             {
-                                r.LookupParameter("АР_НомераПомещенийВедПлинтусов").Set(baseboardNumbersByRoom);
+                                if (!r.LookupParameter("АР_НомераПомещенийВедПлинтусов").IsReadOnly)
+                                {
+                                    r.LookupParameter("АР_НомераПомещенийВедПлинтусов").Set(baseboardNumbersByRoom);
+                                }
                             }
                         }
                         t.Commit();

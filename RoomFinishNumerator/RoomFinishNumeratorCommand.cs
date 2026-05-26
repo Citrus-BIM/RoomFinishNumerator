@@ -25,9 +25,14 @@ namespace RoomFinishNumerator
             }
             catch { }
 
-            Document doc = commandData.Application.ActiveUIDocument.Document;
+            UIDocument uidoc = commandData.Application.ActiveUIDocument;
+            Document doc = uidoc.Document;
 
-            var roomFinishNumeratorWPF = new RoomFinishNumeratorWPF();
+            var phaseItems = GetPhaseSelectionItems(doc);
+            var phaseFilterItems = GetPhaseFilterSelectionItems(doc);
+            var defaultPhaseId = GetDefaultPhaseId(doc, uidoc.ActiveView);
+            var defaultPhaseFilterId = GetDefaultPhaseFilterId(uidoc.ActiveView);
+            var roomFinishNumeratorWPF = new RoomFinishNumeratorWPF(phaseItems, defaultPhaseId, phaseFilterItems, defaultPhaseFilterId);
             roomFinishNumeratorWPF.ShowDialog();
             if (roomFinishNumeratorWPF.DialogResult != true)
             {
@@ -38,8 +43,12 @@ namespace RoomFinishNumerator
             var considerCeilings = roomFinishNumeratorWPF.ConsiderCeilings;
             var considerOpenings = roomFinishNumeratorWPF.ConsiderOpenings;
             var considerBaseboards = roomFinishNumeratorWPF.ConsiderBaseboards;
+            var phaseSelectionOptions = CreatePhaseSelectionOptions(
+                roomFinishNumeratorWPF.ConsiderPhase,
+                roomFinishNumeratorWPF.SelectedPhaseId,
+                roomFinishNumeratorWPF.SelectedPhaseFilterId);
 
-            if (!CheckRequiredParameters(doc, roomFinishNumberingSelectedName, considerBaseboards, ref message))
+            if (!CheckRequiredParameters(doc, roomFinishNumberingSelectedName, considerBaseboards, phaseSelectionOptions, ref message))
             {
                 return Result.Failed;
             }
@@ -49,32 +58,32 @@ namespace RoomFinishNumerator
                 tg.Start("Нумерация отделки");
 
                 // Fill zero in wall finish heights
-                FillZeroInWallFinishHeights(doc);
+                FillZeroInWallFinishHeights(doc, phaseSelectionOptions);
 
                 // Calculate openings areas
                 if (considerOpenings)
                 {
-                    CalculateOpeningsAreas(doc);
+                    CalculateOpeningsAreas(doc, phaseSelectionOptions);
                 }
                 else
                 {
-                    ResetOpeningsAreas(doc);
+                    ResetOpeningsAreas(doc, phaseSelectionOptions);
                 }
 
                 if (roomFinishNumberingSelectedName == "rbt_EndToEndThroughoutTheProject")
                 {
-                    NumberRoomsEndToEnd(doc, considerCeilings);
+                    NumberRoomsEndToEnd(doc, considerCeilings, phaseSelectionOptions);
                     if (considerBaseboards)
                     {
-                        NumberBaseboardsEndToEnd(doc);
+                        NumberBaseboardsEndToEnd(doc, phaseSelectionOptions);
                     }
                 }
                 else if (roomFinishNumberingSelectedName == "rbt_SeparatedByLevels")
                 {
-                    NumberRoomsByLevels(doc, considerCeilings);
+                    NumberRoomsByLevels(doc, considerCeilings, phaseSelectionOptions);
                     if (considerBaseboards)
                     {
-                        NumberBaseboardsByLevels(doc);
+                        NumberBaseboardsByLevels(doc, phaseSelectionOptions);
                     }
                 }
                 tg.Assimilate();
@@ -82,14 +91,65 @@ namespace RoomFinishNumerator
 
             return Result.Succeeded;
         }
-        private bool CheckRequiredParameters(Document doc, string roomFinishNumberingSelectedName, bool considerBaseboards, ref string message)
+
+        private List<PhaseSelectionItem> GetPhaseSelectionItems(Document doc)
         {
-            var rooms = new FilteredElementCollector(doc)
-                        .OfClass(typeof(SpatialElement))
-                        .WhereElementIsNotElementType()
-                        .OfType<Room>()
-                        .Where(r => r.Area > 0)
-                        .ToList();
+            var phases = doc.Phases;
+            var phaseItems = new List<PhaseSelectionItem>();
+            for (int i = 0; i < phases.Size; i++)
+            {
+                var phase = phases.get_Item(i);
+                phaseItems.Add(new PhaseSelectionItem(phase.Id, phase.Name));
+            }
+
+            return phaseItems;
+        }
+
+        private List<PhaseFilterSelectionItem> GetPhaseFilterSelectionItems(Document doc)
+        {
+            var phaseFilterItems = new List<PhaseFilterSelectionItem>
+            {
+                new PhaseFilterSelectionItem(ElementId.InvalidElementId, "Нет")
+            };
+
+            phaseFilterItems.AddRange(new FilteredElementCollector(doc)
+                .OfClass(typeof(PhaseFilter))
+                .WhereElementIsNotElementType()
+                .OfType<PhaseFilter>()
+                .OrderBy(phaseFilter => phaseFilter.Name)
+                .Select(phaseFilter => new PhaseFilterSelectionItem(phaseFilter.Id, phaseFilter.Name)));
+
+            return phaseFilterItems;
+        }
+
+        private ElementId GetDefaultPhaseId(Document doc, View activeView)
+        {
+            var viewPhaseId = activeView?.get_Parameter(BuiltInParameter.VIEW_PHASE)?.AsElementId();
+            if (ElementIdCompat.IsValid(viewPhaseId))
+            {
+                return viewPhaseId;
+            }
+
+            return GetLastPhase(doc)?.Id ?? ElementId.InvalidElementId;
+        }
+
+        private ElementId GetDefaultPhaseFilterId(View activeView)
+        {
+            var viewPhaseFilterId = activeView?.get_Parameter(BuiltInParameter.VIEW_PHASE_FILTER)?.AsElementId();
+            return ElementIdCompat.IsValid(viewPhaseFilterId) ? viewPhaseFilterId : ElementId.InvalidElementId;
+        }
+
+        private PhaseSelectionOptions CreatePhaseSelectionOptions(bool considerPhase, ElementId selectedPhaseId, ElementId selectedPhaseFilterId)
+        {
+            return new PhaseSelectionOptions(
+                considerPhase,
+                considerPhase ? ElementIdCompat.GetValue(selectedPhaseId) : null,
+                considerPhase ? ElementIdCompat.GetValue(selectedPhaseFilterId) : null);
+        }
+
+        private bool CheckRequiredParameters(Document doc, string roomFinishNumberingSelectedName, bool considerBaseboards, PhaseSelectionOptions phaseSelectionOptions, ref string message)
+        {
+            var rooms = GetRooms(doc, phaseSelectionOptions);
 
             bool missingParameters = false;
 
@@ -119,18 +179,12 @@ namespace RoomFinishNumerator
             return !missingParameters;
         }
 
-        private void FillZeroInWallFinishHeights(Document doc)
+        private void FillZeroInWallFinishHeights(Document doc, PhaseSelectionOptions phaseSelectionOptions)
         {
             using (var t = new Transaction(doc, "Заполнение нулей в отделке стен снизу"))
             {
                 t.Start();
-                var roomList = new FilteredElementCollector(doc)
-                    .OfClass(typeof(SpatialElement))
-                    .WhereElementIsNotElementType()
-                    .OfType<Room>()
-                    .Where(r => r.Area > 0)
-                    .OrderBy(r => (doc.GetElement(r.LevelId) as Level).Elevation)
-                    .ToList();
+                var roomList = GetRooms(doc, phaseSelectionOptions);
 
                 foreach (var room in roomList)
                 {
@@ -144,15 +198,16 @@ namespace RoomFinishNumerator
             }
         }
 
-        private void CalculateOpeningsAreas(Document doc)
+        private void CalculateOpeningsAreas(Document doc, PhaseSelectionOptions phaseSelectionOptions)
         {
             using (var t = new Transaction(doc, "Вычисление площадей проемов"))
             {
                 t.Start();
-                var roomList = GetRooms(doc);
+                var roomList = GetRooms(doc, phaseSelectionOptions);
                 StartProgressBarForOpenings(roomList.Count);
 
-                Phase phase = GetLastPhase(doc);
+                Phase phase = GetSelectedPhase(doc, phaseSelectionOptions) ?? GetLastPhase(doc);
+                PhaseFilter phaseFilter = GetSelectedPhaseFilter(doc, phaseSelectionOptions);
 
                 int step = 0;
                 foreach (var room in roomList)
@@ -160,9 +215,9 @@ namespace RoomFinishNumerator
                     step++;
                     UpdateProgressBarForOpenings(step);
 
-                    double doorsInRoomArea = CalculateDoorsArea(doc, room, phase);
-                    double windowsInRoomArea = CalculateWindowsArea(doc, room, phase);
-                    double curtainWallArea = CalculateCurtainWallArea(doc, room, phase);
+                    double doorsInRoomArea = CalculateDoorsArea(doc, room, phase, phaseFilter, phaseSelectionOptions.ConsiderPhase);
+                    double windowsInRoomArea = CalculateWindowsArea(doc, room, phase, phaseFilter, phaseSelectionOptions.ConsiderPhase);
+                    double curtainWallArea = CalculateCurtainWallArea(doc, room, phase, phaseFilter, phaseSelectionOptions.ConsiderPhase);
 
                     var openingsAreaParamGuid = new Guid("18e3f49d-1315-415f-8359-8f045a7a8938");
                     var param = room.get_Parameter(openingsAreaParamGuid);
@@ -174,12 +229,12 @@ namespace RoomFinishNumerator
             }
         }
 
-        private void ResetOpeningsAreas(Document doc)
+        private void ResetOpeningsAreas(Document doc, PhaseSelectionOptions phaseSelectionOptions)
         {
             using (var t = new Transaction(doc, "Сброс площадей проемов"))
             {
                 t.Start();
-                var roomList = GetRooms(doc);
+                var roomList = GetRooms(doc, phaseSelectionOptions);
 
                 var openingsAreaParamGuid = new Guid("18e3f49d-1315-415f-8359-8f045a7a8938");
                 foreach (var room in roomList)
@@ -194,12 +249,12 @@ namespace RoomFinishNumerator
             }
         }
 
-        private void NumberRoomsEndToEnd(Document doc, bool considerCeilings)
+        private void NumberRoomsEndToEnd(Document doc, bool considerCeilings, PhaseSelectionOptions phaseSelectionOptions)
         {
             using (var tg = new TransactionGroup(doc, "Нумерация отделки"))
             {
                 tg.Start();
-                var roomList = GetRooms(doc);
+                var roomList = GetRooms(doc, phaseSelectionOptions);
                 var roomPropertiesList = GetRoomPropertiesList(roomList, considerCeilings);
 
                 StartProgressBar(roomPropertiesList.Count);
@@ -213,7 +268,7 @@ namespace RoomFinishNumerator
                         step++;
                         UpdateProgressBar(step);
 
-                        var roomListForNumbering = GetRoomsForNumbering(doc, rp, considerCeilings);
+                        var roomListForNumbering = GetRoomsForNumbering(doc, rp, considerCeilings, phaseSelectionOptions);
                         var roomNumbersByRoom = string.Join(", ", roomListForNumbering.Select(r => r.Number));
                         var roomNamesByRoom = string.Join(", ", roomListForNumbering.Select(r => r.get_Parameter(BuiltInParameter.ROOM_NAME).AsString()).Distinct());
 
@@ -236,7 +291,7 @@ namespace RoomFinishNumerator
             }
         }
 
-        private void NumberRoomsByLevels(Document doc, bool considerCeilings)
+        private void NumberRoomsByLevels(Document doc, bool considerCeilings, PhaseSelectionOptions phaseSelectionOptions)
         {
             using (var tg = new TransactionGroup(doc, "Нумерация отделки"))
             {
@@ -250,7 +305,7 @@ namespace RoomFinishNumerator
                     step++;
                     UpdateProgressBar(step);
 
-                    var roomList = GetRoomsOnLevel(doc, lv);
+                    var roomList = GetRoomsOnLevel(doc, lv, phaseSelectionOptions);
                     var roomPropertiesList = GetRoomPropertiesList(roomList, considerCeilings);
 
                     using (var t = new Transaction(doc, "Внесение номеров в помещения"))
@@ -258,7 +313,7 @@ namespace RoomFinishNumerator
                         t.Start();
                         foreach (var rp in roomPropertiesList)
                         {
-                            var roomListForNumbering = GetRoomsForNumberingOnLevel(doc, rp, lv, considerCeilings);
+                            var roomListForNumbering = GetRoomsForNumberingOnLevel(doc, rp, lv, considerCeilings, phaseSelectionOptions);
                             var roomNumbersByRoom = string.Join(", ", roomListForNumbering.Select(r => r.Number));
                             var roomNamesByRoom = string.Join(", ", roomListForNumbering.Select(r => r.get_Parameter(BuiltInParameter.ROOM_NAME).AsString()).Distinct());
 
@@ -282,12 +337,12 @@ namespace RoomFinishNumerator
             }
         }
 
-        private void NumberBaseboardsEndToEnd(Document doc)
+        private void NumberBaseboardsEndToEnd(Document doc, PhaseSelectionOptions phaseSelectionOptions)
         {
             using (var tg = new TransactionGroup(doc, "Нумерация плинтусов"))
             {
                 tg.Start();
-                var roomList = GetRooms(doc);
+                var roomList = GetRooms(doc, phaseSelectionOptions);
                 var baseboardPropertiesList = GetBaseboardPropertiesList(roomList);
 
                 StartProgressBar(baseboardPropertiesList.Count);
@@ -301,7 +356,7 @@ namespace RoomFinishNumerator
                         step++;
                         UpdateProgressBar(step);
 
-                        var roomListForNumbering = GetRoomsForBaseboardNumbering(doc, bp);
+                        var roomListForNumbering = GetRoomsForBaseboardNumbering(doc, bp, phaseSelectionOptions);
                         var baseboardNumbersByRoom = string.Join(", ", roomListForNumbering.Select(r => r.Number));
 
                         foreach (var r in roomListForNumbering)
@@ -319,7 +374,7 @@ namespace RoomFinishNumerator
             }
         }
 
-        private void NumberBaseboardsByLevels(Document doc)
+        private void NumberBaseboardsByLevels(Document doc, PhaseSelectionOptions phaseSelectionOptions)
         {
             using (var tg = new TransactionGroup(doc, "Нумерация плинтусов"))
             {
@@ -333,7 +388,7 @@ namespace RoomFinishNumerator
                     step++;
                     UpdateProgressBar(step);
 
-                    var roomList = GetRoomsOnLevel(doc, lv);
+                    var roomList = GetRoomsOnLevel(doc, lv, phaseSelectionOptions);
                     var baseboardPropertiesList = GetBaseboardPropertiesList(roomList);
 
                     using (var t = new Transaction(doc, "Внесение номеров плинтусов в помещения"))
@@ -341,7 +396,7 @@ namespace RoomFinishNumerator
                         t.Start();
                         foreach (var bp in baseboardPropertiesList)
                         {
-                            var roomListForNumbering = GetRoomsForBaseboardNumberingOnLevel(doc, bp, lv);
+                            var roomListForNumbering = GetRoomsForBaseboardNumberingOnLevel(doc, bp, lv, phaseSelectionOptions);
                             var baseboardNumbersByRoom = string.Join(", ", roomListForNumbering.Select(r => r.Number));
 
                             foreach (var r in roomListForNumbering)
@@ -360,18 +415,19 @@ namespace RoomFinishNumerator
             }
         }
 
-        private List<Room> GetRooms(Document doc)
+        private List<Room> GetRooms(Document doc, PhaseSelectionOptions phaseSelectionOptions)
         {
             return new FilteredElementCollector(doc)
                 .OfClass(typeof(SpatialElement))
                 .WhereElementIsNotElementType()
                 .OfType<Room>()
                 .Where(r => r.Area > 0)
+                .Where(r => RoomMatchesPhase(r, phaseSelectionOptions))
                 .OrderBy(r => (doc.GetElement(r.LevelId) as Level).Elevation)
                 .ToList();
         }
 
-        private List<Room> GetRoomsOnLevel(Document doc, Level level)
+        private List<Room> GetRoomsOnLevel(Document doc, Level level, PhaseSelectionOptions phaseSelectionOptions)
         {
             return new FilteredElementCollector(doc)
                 .OfClass(typeof(SpatialElement))
@@ -379,6 +435,7 @@ namespace RoomFinishNumerator
                 .OfType<Room>()
                 .Where(r => r.Area > 0)
                 .Where(r => r.LevelId == level.Id)
+                .Where(r => RoomMatchesPhase(r, phaseSelectionOptions))
                 .ToList();
         }
 
@@ -422,13 +479,14 @@ namespace RoomFinishNumerator
             return baseboardPropertiesList;
         }
 
-        private List<Room> GetRoomsForNumbering(Document doc, RoomProperties rp, bool considerCeilings)
+        private List<Room> GetRoomsForNumbering(Document doc, RoomProperties rp, bool considerCeilings, PhaseSelectionOptions phaseSelectionOptions)
         {
             var query = new FilteredElementCollector(doc)
                 .OfClass(typeof(SpatialElement))
                 .WhereElementIsNotElementType()
                 .OfType<Room>()
                 .Where(r => r.Area > 0)
+                .Where(r => RoomMatchesPhase(r, phaseSelectionOptions))
                 .Where(r => r.get_Parameter(BuiltInParameter.ROOM_FINISH_WALL).AsString() == rp.WallFinishStrParam)
                 .Where(r => r.LookupParameter("АР_ОтделкаСтенСнизу").AsString() == rp.BottomWallFinishStrParam);
 
@@ -440,7 +498,7 @@ namespace RoomFinishNumerator
             return query.OrderBy(r => r.Number, new AlphanumComparatorFastString()).ToList();
         }
 
-        private List<Room> GetRoomsForNumberingOnLevel(Document doc, RoomProperties rp, Level level, bool considerCeilings)
+        private List<Room> GetRoomsForNumberingOnLevel(Document doc, RoomProperties rp, Level level, bool considerCeilings, PhaseSelectionOptions phaseSelectionOptions)
         {
             var query = new FilteredElementCollector(doc)
                 .OfClass(typeof(SpatialElement))
@@ -448,6 +506,7 @@ namespace RoomFinishNumerator
                 .OfType<Room>()
                 .Where(r => r.Area > 0)
                 .Where(r => r.LevelId == level.Id)
+                .Where(r => RoomMatchesPhase(r, phaseSelectionOptions))
                 .Where(r => r.get_Parameter(BuiltInParameter.ROOM_FINISH_WALL).AsString() == rp.WallFinishStrParam)
                 .Where(r => r.LookupParameter("АР_ОтделкаСтенСнизу").AsString() == rp.BottomWallFinishStrParam);
 
@@ -459,19 +518,20 @@ namespace RoomFinishNumerator
             return query.OrderBy(r => r.Number, new AlphanumComparatorFastString()).ToList();
         }
 
-        private List<Room> GetRoomsForBaseboardNumbering(Document doc, BaseboardProperties bp)
+        private List<Room> GetRoomsForBaseboardNumbering(Document doc, BaseboardProperties bp, PhaseSelectionOptions phaseSelectionOptions)
         {
             return new FilteredElementCollector(doc)
                 .OfClass(typeof(SpatialElement))
                 .WhereElementIsNotElementType()
                 .OfType<Room>()
                 .Where(r => r.Area > 0)
+                .Where(r => RoomMatchesPhase(r, phaseSelectionOptions))
                 .Where(r => r.get_Parameter(BuiltInParameter.ROOM_FINISH_BASE).AsString() == bp.BaseboardTypeStrParam)
                 .OrderBy(r => r.Number, new AlphanumComparatorFastString())
                 .ToList();
         }
 
-        private List<Room> GetRoomsForBaseboardNumberingOnLevel(Document doc, BaseboardProperties bp, Level level)
+        private List<Room> GetRoomsForBaseboardNumberingOnLevel(Document doc, BaseboardProperties bp, Level level, PhaseSelectionOptions phaseSelectionOptions)
         {
             return new FilteredElementCollector(doc)
                 .OfClass(typeof(SpatialElement))
@@ -479,9 +539,51 @@ namespace RoomFinishNumerator
                 .OfType<Room>()
                 .Where(r => r.Area > 0)
                 .Where(r => r.LevelId == level.Id)
+                .Where(r => RoomMatchesPhase(r, phaseSelectionOptions))
                 .Where(r => r.get_Parameter(BuiltInParameter.ROOM_FINISH_BASE).AsString() == bp.BaseboardTypeStrParam)
                 .OrderBy(r => r.Number, new AlphanumComparatorFastString())
                 .ToList();
+        }
+
+        private bool RoomMatchesPhase(Room room, PhaseSelectionOptions phaseSelectionOptions)
+        {
+            return phaseSelectionOptions.MatchesPhaseId(GetRoomPhaseIdValue(room));
+        }
+
+        private long? GetRoomPhaseIdValue(Room room)
+        {
+            var roomPhaseId = room.get_Parameter(BuiltInParameter.ROOM_PHASE_ID)?.AsElementId();
+            if (ElementIdCompat.IsValid(roomPhaseId))
+            {
+                return ElementIdCompat.GetValue(roomPhaseId);
+            }
+
+            if (room.HasPhases() && ElementIdCompat.IsValid(room.CreatedPhaseId))
+            {
+                return ElementIdCompat.GetValue(room.CreatedPhaseId);
+            }
+
+            return null;
+        }
+
+        private Phase GetSelectedPhase(Document doc, PhaseSelectionOptions phaseSelectionOptions)
+        {
+            if (!phaseSelectionOptions.ConsiderPhase || !phaseSelectionOptions.SelectedPhaseIdValue.HasValue)
+            {
+                return null;
+            }
+
+            return doc.GetElement(ElementIdCompat.Create(phaseSelectionOptions.SelectedPhaseIdValue.Value)) as Phase;
+        }
+
+        private PhaseFilter GetSelectedPhaseFilter(Document doc, PhaseSelectionOptions phaseSelectionOptions)
+        {
+            if (!phaseSelectionOptions.ConsiderPhase || !phaseSelectionOptions.SelectedPhaseFilterIdValue.HasValue)
+            {
+                return null;
+            }
+
+            return doc.GetElement(ElementIdCompat.Create(phaseSelectionOptions.SelectedPhaseFilterIdValue.Value)) as PhaseFilter;
         }
 
         private Phase GetLastPhase(Document doc)
@@ -490,7 +592,49 @@ namespace RoomFinishNumerator
             return phases.Size > 0 ? phases.get_Item(phases.Size - 1) : null;
         }
 
-        private double CalculateDoorsArea(Document doc, Room room, Phase phase)
+        private bool IsFamilyInstanceInRoom(FamilyInstance familyInstance, Room room, Phase phase)
+        {
+            if (phase == null)
+            {
+                return familyInstance.Room?.Id == room.Id
+                    || familyInstance.FromRoom?.Id == room.Id
+                    || familyInstance.ToRoom?.Id == room.Id;
+            }
+
+            return familyInstance.get_Room(phase)?.Id == room.Id
+                || familyInstance.get_FromRoom(phase)?.Id == room.Id
+                || familyInstance.get_ToRoom(phase)?.Id == room.Id;
+        }
+
+        private bool IsElementVisibleInPhase(Element element, Phase phase, PhaseFilter phaseFilter, bool usePhaseFilter)
+        {
+            if (phase == null)
+            {
+                return true;
+            }
+
+            var phaseStatus = element.GetPhaseStatus(phase.Id);
+            if (!usePhaseFilter)
+            {
+                return phaseStatus != ElementOnPhaseStatus.Demolished;
+            }
+
+            if (phaseFilter == null)
+            {
+                return true;
+            }
+
+            if (phaseStatus == ElementOnPhaseStatus.Future
+                || phaseStatus == ElementOnPhaseStatus.Past
+                || phaseStatus == ElementOnPhaseStatus.None)
+            {
+                return false;
+            }
+
+            return phaseFilter.GetPhaseStatusPresentation(phaseStatus) != PhaseStatusPresentation.DontShow;
+        }
+
+        private double CalculateDoorsArea(Document doc, Room room, Phase phase, PhaseFilter phaseFilter, bool usePhaseFilter)
         {
             var doorsInRoomArea = 0.0;
             var doorsOnRoomLevelList = new FilteredElementCollector(doc)
@@ -499,11 +643,11 @@ namespace RoomFinishNumerator
                 .WhereElementIsNotElementType()
                 .OfType<FamilyInstance>()
                 .Where(d => d.LevelId == room.LevelId)
-                .Where(d => phase == null || d.GetPhaseStatus(phase.Id) != ElementOnPhaseStatus.Demolished)
+                .Where(d => IsElementVisibleInPhase(d, phase, phaseFilter, usePhaseFilter))
                 .ToList();
 
             var doorsInRoomList = doorsOnRoomLevelList
-                .Where(d => d.Room?.Id == room.Id || d.FromRoom?.Id == room.Id || d.ToRoom?.Id == room.Id)
+                .Where(d => IsFamilyInstanceInRoom(d, room, phase))
                 .Distinct()
                 .ToList();
 
@@ -523,7 +667,7 @@ namespace RoomFinishNumerator
             return doorsInRoomArea;
         }
 
-        private double CalculateWindowsArea(Document doc, Room room, Phase phase)
+        private double CalculateWindowsArea(Document doc, Room room, Phase phase, PhaseFilter phaseFilter, bool usePhaseFilter)
         {
             var windowsInRoomArea = 0.0;
             var windowsOnRoomLevelList = new FilteredElementCollector(doc)
@@ -532,11 +676,11 @@ namespace RoomFinishNumerator
                 .WhereElementIsNotElementType()
                 .OfType<FamilyInstance>()
                 .Where(w => w.LevelId == room.LevelId)
-                .Where(w => phase == null || w.GetPhaseStatus(phase.Id) != ElementOnPhaseStatus.Demolished)
+                .Where(w => IsElementVisibleInPhase(w, phase, phaseFilter, usePhaseFilter))
                 .ToList();
 
             var windowsInRoomList = windowsOnRoomLevelList
-                .Where(w => w.Room?.Id == room.Id || w.FromRoom?.Id == room.Id || w.ToRoom?.Id == room.Id)
+                .Where(w => IsFamilyInstanceInRoom(w, room, phase))
                 .Distinct()
                 .ToList();
 
@@ -556,7 +700,7 @@ namespace RoomFinishNumerator
             return windowsInRoomArea;
         }
 
-        private double CalculateCurtainWallArea(Document doc, Room room, Phase phase)
+        private double CalculateCurtainWallArea(Document doc, Room room, Phase phase, PhaseFilter phaseFilter, bool usePhaseFilter)
         {
             var curtainWallArea = 0.0;
             var roomSolid = GetRoomSolid(room);
@@ -570,7 +714,7 @@ namespace RoomFinishNumerator
                     .OfType<Wall>()
                     .Where(w => w.LevelId == room.LevelId)
                     .Where(w => w.CurtainGrid != null)
-                    .Where(w => phase == null || w.GetPhaseStatus(phase.Id) != ElementOnPhaseStatus.Demolished)
+                    .Where(w => IsElementVisibleInPhase(w, phase, phaseFilter, usePhaseFilter))
                     .ToList();
 
                 var intersectOptions = new SolidCurveIntersectionOptions();

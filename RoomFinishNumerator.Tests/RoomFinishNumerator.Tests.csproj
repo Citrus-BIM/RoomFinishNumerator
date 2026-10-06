@@ -21,6 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Remove="Revit_All_Main_Versions_API_x64" />
     <Reference Remove="PresentationCore" />
     <Reference Remove="PresentationFramework" />
     <Reference Remove="System" />
